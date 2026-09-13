@@ -106,6 +106,17 @@ public sealed class HomeSectionManagerTests : SqliteDbTestFixture
     }
 
     [Fact]
+    public void SetDefaultSections_EmptyListRestoresTheBuiltInLayout()
+    {
+        _manager.SetDefaultSections([new HomeSection { Key = HomeSectionKeys.Resume }]);
+
+        _manager.SetDefaultSections([]);
+
+        Assert.Empty(_configuration.DefaultHomeSections);
+        Assert.Equal(HomeSectionKeys.SmallLibraryTiles, _manager.GetDefaultSections()[0].Key);
+    }
+
+    [Fact]
     public void SetSections_NumbersOrderFromListPosition()
     {
         // Order is deliberately not taken from the caller, so a client cannot store a list whose
@@ -122,6 +133,33 @@ public sealed class HomeSectionManagerTests : SqliteDbTestFixture
 
         Assert.Equal([0, 1], sections.Select(section => section.Order));
         Assert.Equal(HomeSectionKeys.NextUp, sections[0].Key);
+    }
+
+    [Fact]
+    public void SetSections_RoundTripsSeveralBoundItemsInOrder()
+    {
+        var first = Guid.NewGuid();
+        var second = Guid.NewGuid();
+
+        _manager.SetSections(_user.Id, Client, [new HomeSection { Key = HomeSectionKeys.Genre, ItemIds = [first, second] }]);
+
+        var section = Assert.Single(_manager.GetSections(_user.Id, Client));
+        Assert.Equal([first, second], section.ItemIds);
+    }
+
+    [Fact]
+    public async Task GetHomeSectionsAsync_PassesEveryBoundItemToTheProvider()
+    {
+        var first = Guid.NewGuid();
+        var second = Guid.NewGuid();
+        var provider = new FakeSectionProvider(HomeSectionKeys.Genre, "Something") { AllowsMultipleItems = true };
+        _manager.AddParts([provider]);
+        SetLayout(new HomeSection { Key = HomeSectionKeys.Genre, ItemIds = [first, second] });
+
+        await GetSectionsAsync();
+
+        Assert.Equal([first, second], provider.LastQuery!.ItemIds);
+        Assert.Equal(first, provider.LastQuery.ItemId);
     }
 
     [Fact]
@@ -142,12 +180,12 @@ public sealed class HomeSectionManagerTests : SqliteDbTestFixture
         _manager.SetSections(
             _user.Id,
             Client,
-            [new HomeSection { Key = HomeSectionKeys.PinnedCollection, ItemId = collectionId, MaxItems = 5, Active = false }]);
+            [new HomeSection { Key = HomeSectionKeys.PinnedCollection, ItemIds = [collectionId], MaxItems = 5, Active = false }]);
 
         var section = Assert.Single(_manager.GetSections(_user.Id, Client));
 
         Assert.Equal(HomeSectionKeys.PinnedCollection, section.Key);
-        Assert.Equal(collectionId, section.ItemId);
+        Assert.Equal([collectionId], section.ItemIds);
         Assert.Equal(5, section.MaxItems);
         Assert.False(section.Active);
     }
@@ -247,7 +285,7 @@ public sealed class HomeSectionManagerTests : SqliteDbTestFixture
         var provider = new FakeSectionProvider(HomeSectionKeys.PinnedCollection, "In it");
         var collectionId = Guid.NewGuid();
         _manager.AddParts([provider]);
-        SetLayout(new HomeSection { Key = HomeSectionKeys.PinnedCollection, ItemId = collectionId, MaxItems = 4 });
+        SetLayout(new HomeSection { Key = HomeSectionKeys.PinnedCollection, ItemIds = [collectionId], MaxItems = 4 });
 
         await GetSectionsAsync();
 
@@ -314,13 +352,14 @@ public sealed class HomeSectionManagerTests : SqliteDbTestFixture
         ]);
         SetLayout(
             new HomeSection { Key = HomeSectionKeys.Resume },
-            new HomeSection { Key = HomeSectionKeys.PinnedCollection, ItemId = collectionId });
+            new HomeSection { Key = HomeSectionKeys.PinnedCollection, ItemIds = [collectionId] });
 
         var sections = await GetSectionsAsync();
 
         Assert.Equal("resume", sections[0].Id);
         Assert.Equal($"pinnedcollection-{collectionId:N}", sections[1].Id);
         Assert.Equal(collectionId, sections[1].ParentId);
+        Assert.Equal(BaseItemKind.BoxSet, sections[1].ParentType);
     }
 
     [Fact]
@@ -330,20 +369,20 @@ public sealed class HomeSectionManagerTests : SqliteDbTestFixture
         var second = Guid.NewGuid();
         _manager.AddParts(
         [
-            new FakeSectionProvider(HomeSectionKeys.BecauseYouWatched, _ =>
+            new FakeSectionProvider("plugin.recommended", _ =>
             [
                 FakeSectionProvider.Row("Because you watched A", first, "B"),
                 FakeSectionProvider.Row("Because you watched C", second, "D")
             ])
         ]);
-        SetLayout(new HomeSection { Key = HomeSectionKeys.BecauseYouWatched });
+        SetLayout(new HomeSection { Key = "plugin.recommended" });
 
         var sections = await GetSectionsAsync();
 
         Assert.Equal(2, sections.Count);
-        Assert.All(sections, section => Assert.Equal(HomeSectionKeys.BecauseYouWatched, section.Key));
-        Assert.Equal($"becauseyouwatched-{first:N}", sections[0].Id);
-        Assert.Equal($"becauseyouwatched-{second:N}", sections[1].Id);
+        Assert.All(sections, section => Assert.Equal("plugin.recommended", section.Key));
+        Assert.Equal($"plugin.recommended-{first:N}", sections[0].Id);
+        Assert.Equal($"plugin.recommended-{second:N}", sections[1].Id);
     }
 
     [Fact]

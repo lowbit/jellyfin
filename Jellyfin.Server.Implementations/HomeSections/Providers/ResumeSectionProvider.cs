@@ -45,6 +45,9 @@ public abstract class ResumeSectionProvider : IHomeSectionProvider
     public BaseItemKind? ItemKind => null;
 
     /// <inheritdoc />
+    public bool AllowsMultipleItems => false;
+
+    /// <inheritdoc />
     public bool DependsOnUserData => true;
 
     /// <summary>

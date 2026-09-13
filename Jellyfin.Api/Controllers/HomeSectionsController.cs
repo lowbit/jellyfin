@@ -7,10 +7,8 @@ using Jellyfin.Api.Helpers;
 using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Extensions;
 using MediaBrowser.Common.Api;
-using MediaBrowser.Controller.Configuration;
 using MediaBrowser.Controller.HomeSections;
 using MediaBrowser.Controller.Library;
-using MediaBrowser.Model.Configuration;
 using MediaBrowser.Model.HomeSections;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
@@ -34,22 +32,16 @@ public class HomeSectionsController : BaseJellyfinApiController
 
     private readonly IUserManager _userManager;
     private readonly IHomeSectionManager _homeSectionManager;
-    private readonly IServerConfigurationManager _configurationManager;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="HomeSectionsController"/> class.
     /// </summary>
     /// <param name="userManager">Instance of the <see cref="IUserManager"/> interface.</param>
     /// <param name="homeSectionManager">Instance of the <see cref="IHomeSectionManager"/> interface.</param>
-    /// <param name="configurationManager">Instance of the <see cref="IServerConfigurationManager"/> interface.</param>
-    public HomeSectionsController(
-        IUserManager userManager,
-        IHomeSectionManager homeSectionManager,
-        IServerConfigurationManager configurationManager)
+    public HomeSectionsController(IUserManager userManager, IHomeSectionManager homeSectionManager)
     {
         _userManager = userManager;
         _homeSectionManager = homeSectionManager;
-        _configurationManager = configurationManager;
     }
 
     /// <summary>
@@ -105,7 +97,8 @@ public class HomeSectionsController : BaseJellyfinApiController
             {
                 Key = provider.Key.ToLowerInvariant(),
                 Name = provider.Name,
-                ItemKind = provider.ItemKind
+                ItemKind = provider.ItemKind,
+                AllowsMultipleItems = provider.ItemKind is not null && provider.AllowsMultipleItems
             })
             .OrderBy(provider => provider.Name, StringComparer.CurrentCultureIgnoreCase)
             .ToList();
@@ -186,16 +179,7 @@ public class HomeSectionsController : BaseJellyfinApiController
             return BadRequest(problem);
         }
 
-        _homeSectionManager.SetSections(
-            requestUserId,
-            client,
-            sections.Select(section => new HomeSection
-            {
-                Key = section.Key,
-                ItemId = section.ItemId,
-                MaxItems = section.MaxItems,
-                Active = section.Active
-            }).ToList());
+        _homeSectionManager.SetSections(requestUserId, client, sections.Select(ToSection).ToList());
 
         return NoContent();
     }
@@ -271,17 +255,7 @@ public class HomeSectionsController : BaseJellyfinApiController
             return BadRequest(problem);
         }
 
-        _configurationManager.Configuration.DefaultHomeSections = sections
-            .Select(section => new HomeSectionOptions
-            {
-                Key = section.Key.ToLowerInvariant(),
-                ItemId = section.ItemId,
-                MaxItems = section.MaxItems,
-                Active = section.Active
-            })
-            .ToArray();
-
-        _configurationManager.SaveConfiguration();
+        _homeSectionManager.SetDefaultSections(sections.Select(ToSection).ToList());
 
         return NoContent();
     }
@@ -290,19 +264,36 @@ public class HomeSectionsController : BaseJellyfinApiController
         => new()
         {
             Key = section.Key,
-            ItemId = section.ItemId,
+            ItemIds = section.ItemIds,
+            MaxItems = section.MaxItems,
+            Active = section.Active
+        };
+
+    private static HomeSection ToSection(HomeSectionConfigDto section)
+        => new()
+        {
+            Key = section.Key,
+            ItemIds = BoundItems(section),
             MaxItems = section.MaxItems,
             Active = section.Active
         };
 
     /// <summary>
+    /// Gets the items a section is bound to, without empty ids and without repeats.
+    /// </summary>
+    private static List<Guid> BoundItems(HomeSectionConfigDto section)
+        => section.ItemIds.Where(id => !id.IsEmpty()).Distinct().ToList();
+
+    /// <summary>
     /// Checks a layout before it is stored.
     /// </summary>
     /// <remarks>
-    /// A section whose provider takes an item is rejected without one, since it would render as a
-    /// heading over nothing. The same section twice is rejected because its rows would share an
-    /// id. A key nothing claims is allowed through: it is what a row from an uninstalled plugin
-    /// looks like, and refusing it would make such a layout impossible to save again.
+    /// A section whose provider takes one item is rejected without exactly one, since it would
+    /// render as a heading over nothing. Beyond that the rule is that no two rows may share an id,
+    /// which for a provider bound to several items means no item twice across the layout, and the
+    /// unbound section, which draws nothing, at most once. A key nothing claims is allowed through:
+    /// it is what a row from an uninstalled plugin looks like, and refusing it would make such a
+    /// layout impossible to save again.
     /// </remarks>
     /// <returns>What is wrong, or null when the layout is acceptable.</returns>
     private string? Validate(IReadOnlyList<HomeSectionConfigDto> sections)
@@ -316,17 +307,30 @@ public class HomeSectionsController : BaseJellyfinApiController
                 return "A section requires a key.";
             }
 
-            var hasItem = section.ItemId.HasValue && !section.ItemId.Value.IsEmpty();
+            var items = BoundItems(section);
             var provider = _homeSectionManager.GetProvider(section.Key);
+            var takesMany = provider?.ItemKind is not null && provider.AllowsMultipleItems;
 
-            if (provider?.ItemKind is not null && !hasItem)
+            if (provider?.ItemKind is not null && !takesMany && items.Count != 1)
             {
-                return $"A {section.Key} section requires an itemId.";
+                return $"A {section.Key} section requires exactly one item.";
             }
 
-            if (!seen.Add((section.Key.ToLowerInvariant(), hasItem ? section.ItemId : null)))
+            var key = section.Key.ToLowerInvariant();
+
+            // One entry per row the section will produce. A provider that takes one item, and one
+            // nothing is known about because its plugin is gone, produce a row for their binding;
+            // a provider that takes several produces one per item.
+            var rows = takesMany && items.Count > 0
+                ? items.Select(item => (Guid?)item)
+                : [items.Count > 0 && !takesMany ? items[0] : null];
+
+            foreach (var row in rows)
             {
-                return $"The {section.Key} section appears more than once.";
+                if (!seen.Add((key, row)))
+                {
+                    return $"The {section.Key} section appears more than once.";
+                }
             }
         }
 

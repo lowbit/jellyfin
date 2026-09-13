@@ -13,7 +13,8 @@ namespace MediaBrowser.Controller.HomeSections;
 /// Implementations are discovered from the server and from plugins at startup and registered with
 /// <see cref="IHomeSectionManager.AddParts"/>, the same way similar items and search providers are.
 /// A plugin adds a kind of row by implementing this; the row then shows up in the settings picker
-/// of every client that reads <c>GET /HomeSections/Providers</c>, with no client change.
+/// of every client that reads <c>GET /HomeSections/Providers</c>, with no client change. Where it
+/// sits is the user's choice, like every other section.
 /// </para>
 /// <para>
 /// Instances are created once and shared, so they must be safe to call concurrently.
@@ -48,6 +49,18 @@ public interface IHomeSectionProvider
     /// screen uses the kind to decide what to let the user pick.
     /// </remarks>
     BaseItemKind? ItemKind { get; }
+
+    /// <summary>
+    /// Gets a value indicating whether a section may be bound to several items of
+    /// <see cref="ItemKind"/> instead of exactly one.
+    /// </summary>
+    /// <remarks>
+    /// For providers that build one row per item, such as a row per genre. The rows follow the
+    /// order of the binding, and bound to nothing the section draws nothing; a settings screen
+    /// starts such a section off with everything ticked. Meaningless when <see cref="ItemKind"/>
+    /// is null.
+    /// </remarks>
+    bool AllowsMultipleItems { get; }
 
     /// <summary>
     /// Gets a value indicating whether the rows change when the user's own data does.

@@ -41,6 +41,9 @@ public sealed class LiveTvSectionProvider : IHomeSectionProvider
     public BaseItemKind? ItemKind => null;
 
     /// <inheritdoc />
+    public bool AllowsMultipleItems => false;
+
+    /// <inheritdoc />
     public bool DependsOnUserData => false;
 
     /// <inheritdoc />

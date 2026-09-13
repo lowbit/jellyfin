@@ -29,4 +29,15 @@ public class HomeSectionProviderDto
     /// or a genre.
     /// </remarks>
     public BaseItemKind? ItemKind { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether a section can be bound to several items of that
+    /// kind rather than one.
+    /// </summary>
+    /// <remarks>
+    /// Such a section draws one row per bound item, in that order, and nothing when bound to
+    /// nothing. A settings screen offers a multiple choice for it, starting with everything
+    /// chosen so that adding the section needs no further setup.
+    /// </remarks>
+    public bool AllowsMultipleItems { get; set; }
 }

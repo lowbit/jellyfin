@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Jellyfin.Data.Enums;
 using MediaBrowser.Model.Dto;
 using MediaBrowser.Model.HomeSections;
 
@@ -31,6 +32,15 @@ public sealed class HomeSectionResult
     /// Becomes part of the row's id, so two rows from the same provider must not share one.
     /// </remarks>
     public Guid? ParentId { get; init; }
+
+    /// <summary>
+    /// Gets the kind of item <see cref="ParentId"/> refers to.
+    /// </summary>
+    /// <remarks>
+    /// Set it whenever <see cref="ParentId"/> is, so a client can link the heading to the item
+    /// without knowing what the provider is about.
+    /// </remarks>
+    public BaseItemKind? ParentType { get; init; }
 
     /// <summary>
     /// Gets the items to display, in order.

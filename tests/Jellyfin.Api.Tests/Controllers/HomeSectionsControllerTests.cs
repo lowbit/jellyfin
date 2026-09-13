@@ -10,11 +10,9 @@ using Jellyfin.Api.Controllers;
 using Jellyfin.Data.Enums;
 using Jellyfin.Database.Implementations.Entities;
 
-using MediaBrowser.Controller.Configuration;
 using MediaBrowser.Controller.HomeSections;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Net;
-using MediaBrowser.Model.Configuration;
 using MediaBrowser.Model.HomeSections;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -36,18 +34,16 @@ public sealed class HomeSectionsControllerTests
 
     private readonly Mock<IUserManager> _userManager = new();
     private readonly Mock<IHomeSectionManager> _homeSectionManager = new();
-    private readonly Mock<IServerConfigurationManager> _configurationManager = new();
-    private readonly ServerConfiguration _configuration = new();
 
     public HomeSectionsControllerTests()
     {
         _userManager.Setup(x => x.GetUserById(_user.Id)).Returns(_user);
         _userManager.Setup(x => x.GetUserById(_otherUser.Id)).Returns(_otherUser);
-        _configurationManager.SetupGet(x => x.Configuration).Returns(_configuration);
 
         RegisterProvider(HomeSectionKeys.Resume, "Continue Watching");
         RegisterProvider(HomeSectionKeys.PinnedCollection, "Collection", BaseItemKind.BoxSet);
-        RegisterProvider(HomeSectionKeys.Genre, "Genre", BaseItemKind.Genre);
+        RegisterProvider(HomeSectionKeys.Genre, "Genres", BaseItemKind.Genre, allowsMultipleItems: true);
+        RegisterProvider("plugin.pinned", "Pinned item", BaseItemKind.Movie);
     }
 
     [Fact]
@@ -101,7 +97,7 @@ public sealed class HomeSectionsControllerTests
         var providers = CreateController(_user).GetHomeSectionProviders().Value;
 
         Assert.NotNull(providers);
-        Assert.Equal(["Collection", "Continue Watching", "Genre"], providers!.Select(provider => provider.Name));
+        Assert.Equal(["Collection", "Continue Watching", "Genres", "Pinned item"], providers!.Select(provider => provider.Name));
         Assert.Equal(BaseItemKind.BoxSet, providers[0].ItemKind);
         Assert.Null(providers[1].ItemKind);
     }
@@ -154,8 +150,8 @@ public sealed class HomeSectionsControllerTests
 
         var result = CreateController(_user).UpdateHomeSectionConfig(
             [
-                new HomeSectionConfigDto { Key = HomeSectionKeys.Genre, ItemId = genreId },
-                new HomeSectionConfigDto { Key = "GENRE", ItemId = genreId }
+                new HomeSectionConfigDto { Key = HomeSectionKeys.Genre, ItemIds = [genreId] },
+                new HomeSectionConfigDto { Key = "GENRE", ItemIds = [genreId] }
             ],
             _user.Id,
             Client);
@@ -167,18 +163,95 @@ public sealed class HomeSectionsControllerTests
     [Fact]
     public void UpdateHomeSectionConfig_AllowsTheSameProviderBoundToDifferentItems()
     {
+        // What a layout saved before one section could hold several genres looks like.
         var stored = CaptureStored();
 
         var result = CreateController(_user).UpdateHomeSectionConfig(
             [
-                new HomeSectionConfigDto { Key = HomeSectionKeys.Genre, ItemId = Guid.NewGuid() },
-                new HomeSectionConfigDto { Key = HomeSectionKeys.Genre, ItemId = Guid.NewGuid() }
+                new HomeSectionConfigDto { Key = HomeSectionKeys.Genre, ItemIds = [Guid.NewGuid()] },
+                new HomeSectionConfigDto { Key = HomeSectionKeys.Genre, ItemIds = [Guid.NewGuid()] }
             ],
             _user.Id,
             Client);
 
         Assert.IsType<NoContentResult>(result);
         Assert.Equal(2, stored.Value!.Count);
+    }
+
+    [Fact]
+    public void UpdateHomeSectionConfig_AcceptsASectionThatTakesSeveralItemsWithNone()
+    {
+        // Every genre unticked draws nothing, which is a valid state of the section, not an error.
+        var stored = CaptureStored();
+
+        var result = CreateController(_user).UpdateHomeSectionConfig(
+            [new HomeSectionConfigDto { Key = HomeSectionKeys.Genre }],
+            _user.Id,
+            Client);
+
+        Assert.IsType<NoContentResult>(result);
+        Assert.Empty(Assert.Single(stored.Value!).ItemIds);
+    }
+
+    [Fact]
+    public void UpdateHomeSectionConfig_RejectsOneItemInTwoSections()
+    {
+        // Both would draw the same row.
+        var genreId = Guid.NewGuid();
+
+        var result = CreateController(_user).UpdateHomeSectionConfig(
+            [
+                new HomeSectionConfigDto { Key = HomeSectionKeys.Genre, ItemIds = [genreId, Guid.NewGuid()] },
+                new HomeSectionConfigDto { Key = HomeSectionKeys.Genre, ItemIds = [genreId] }
+            ],
+            _user.Id,
+            Client);
+
+        Assert.IsType<BadRequestObjectResult>(result);
+        VerifyNothingStored();
+    }
+
+    [Fact]
+    public void UpdateHomeSectionConfig_RejectsTheUnboundSectionTwice()
+    {
+        // Two of them could only ever draw the same rows.
+        var result = CreateController(_user).UpdateHomeSectionConfig(
+            [
+                new HomeSectionConfigDto { Key = HomeSectionKeys.Genre },
+                new HomeSectionConfigDto { Key = HomeSectionKeys.Genre }
+            ],
+            _user.Id,
+            Client);
+
+        Assert.IsType<BadRequestObjectResult>(result);
+        VerifyNothingStored();
+    }
+
+    [Fact]
+    public void UpdateHomeSectionConfig_RejectsASectionThatTakesOneItemWithSeveral()
+    {
+        var result = CreateController(_user).UpdateHomeSectionConfig(
+            [new HomeSectionConfigDto { Key = "plugin.pinned", ItemIds = [Guid.NewGuid(), Guid.NewGuid()] }],
+            _user.Id,
+            Client);
+
+        Assert.IsType<BadRequestObjectResult>(result);
+        VerifyNothingStored();
+    }
+
+    [Fact]
+    public void UpdateHomeSectionConfig_DropsEmptyAndRepeatedItems()
+    {
+        var genreId = Guid.NewGuid();
+        var stored = CaptureStored();
+
+        var result = CreateController(_user).UpdateHomeSectionConfig(
+            [new HomeSectionConfigDto { Key = HomeSectionKeys.Genre, ItemIds = [genreId, Guid.Empty, genreId] }],
+            _user.Id,
+            Client);
+
+        Assert.IsType<NoContentResult>(result);
+        Assert.Equal([genreId], Assert.Single(stored.Value!).ItemIds);
     }
 
     [Fact]
@@ -209,6 +282,16 @@ public sealed class HomeSectionsControllerTests
     }
 
     [Fact]
+    public void GetHomeSectionProviders_SaysWhichTakeSeveralItems()
+    {
+        var providers = CreateController(_user).GetHomeSectionProviders().Value;
+        Assert.NotNull(providers);
+
+        Assert.True(providers.Single(provider => provider.Key == HomeSectionKeys.Genre).AllowsMultipleItems);
+        Assert.False(providers.Single(provider => provider.Key == HomeSectionKeys.PinnedCollection).AllowsMultipleItems);
+    }
+
+    [Fact]
     public void UpdateHomeSectionConfig_StoresWhatWasSent()
     {
         var itemId = Guid.NewGuid();
@@ -217,7 +300,7 @@ public sealed class HomeSectionsControllerTests
         var result = CreateController(_user).UpdateHomeSectionConfig(
             [
                 new HomeSectionConfigDto { Key = HomeSectionKeys.Resume, MaxItems = 8 },
-                new HomeSectionConfigDto { Key = HomeSectionKeys.Genre, ItemId = itemId, Active = false }
+                new HomeSectionConfigDto { Key = HomeSectionKeys.Genre, ItemIds = [itemId], Active = false }
             ],
             _user.Id,
             Client);
@@ -225,7 +308,7 @@ public sealed class HomeSectionsControllerTests
         Assert.IsType<NoContentResult>(result);
         Assert.NotNull(stored.Value);
         Assert.Equal(8, stored.Value![0].MaxItems);
-        Assert.Equal(itemId, stored.Value[1].ItemId);
+        Assert.Equal([itemId], stored.Value[1].ItemIds);
         Assert.False(stored.Value[1].Active);
     }
 
@@ -255,29 +338,36 @@ public sealed class HomeSectionsControllerTests
     public void UpdateDefaultHomeSections_RejectsASectionWithoutItsItem()
     {
         var result = CreateController(_user).UpdateDefaultHomeSections(
-            [new HomeSectionConfigDto { Key = HomeSectionKeys.Genre }]);
+            [new HomeSectionConfigDto { Key = HomeSectionKeys.PinnedCollection }]);
 
         Assert.IsType<BadRequestObjectResult>(result);
-        Assert.Empty(_configuration.DefaultHomeSections);
+        _homeSectionManager.Verify(x => x.SetDefaultSections(It.IsAny<IReadOnlyList<HomeSection>>()), Times.Never);
     }
 
     [Fact]
-    public void UpdateDefaultHomeSections_SavesTheConfiguration()
+    public void UpdateDefaultHomeSections_HandsTheLayoutToTheManager()
     {
+        IReadOnlyList<HomeSection>? stored = null;
+        _homeSectionManager
+            .Setup(x => x.SetDefaultSections(It.IsAny<IReadOnlyList<HomeSection>>()))
+            .Callback<IReadOnlyList<HomeSection>>(sections => stored = sections);
+
         var result = CreateController(_user).UpdateDefaultHomeSections(
             [new HomeSectionConfigDto { Key = "NextUp", MaxItems = 12 }]);
 
         Assert.IsType<NoContentResult>(result);
-        Assert.Equal("nextup", Assert.Single(_configuration.DefaultHomeSections).Key);
-        _configurationManager.Verify(x => x.SaveConfiguration(), Times.Once);
+        var section = Assert.Single(stored!);
+        Assert.Equal("NextUp", section.Key);
+        Assert.Equal(12, section.MaxItems);
     }
 
-    private void RegisterProvider(string key, string name, BaseItemKind? itemKind = null)
+    private void RegisterProvider(string key, string name, BaseItemKind? itemKind = null, bool allowsMultipleItems = false)
     {
         var provider = new Mock<IHomeSectionProvider>();
         provider.SetupGet(x => x.Key).Returns(key);
         provider.SetupGet(x => x.Name).Returns(name);
         provider.SetupGet(x => x.ItemKind).Returns(itemKind);
+        provider.SetupGet(x => x.AllowsMultipleItems).Returns(allowsMultipleItems);
 
         _homeSectionManager
             .Setup(x => x.GetProvider(It.Is<string>(k => string.Equals(k, key, StringComparison.OrdinalIgnoreCase))))
@@ -319,10 +409,7 @@ public sealed class HomeSectionsControllerTests
             new Claim(ClaimTypes.Role, isAdministrator ? UserRoles.Administrator : UserRoles.User)
         };
 
-        return new HomeSectionsController(
-            _userManager.Object,
-            _homeSectionManager.Object,
-            _configurationManager.Object)
+        return new HomeSectionsController(_userManager.Object, _homeSectionManager.Object)
         {
             ControllerContext = new ControllerContext
             {

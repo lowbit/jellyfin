@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 namespace MediaBrowser.Model.HomeSections;
 
@@ -20,13 +21,14 @@ public class HomeSectionConfigDto
     public string Key { get; set; } = string.Empty;
 
     /// <summary>
-    /// Gets or sets the item this section is bound to.
+    /// Gets or sets the items this section is bound to.
     /// </summary>
     /// <remarks>
-    /// Required when the provider declares an <see cref="HomeSectionProviderDto.ItemKind"/>,
-    /// ignored otherwise.
+    /// Exactly one when the provider declares an <see cref="HomeSectionProviderDto.ItemKind"/>
+    /// and takes a single item. Any number, in display order, when it
+    /// <see cref="HomeSectionProviderDto.AllowsMultipleItems"/>. Ignored otherwise.
     /// </remarks>
-    public Guid? ItemId { get; set; }
+    public IReadOnlyList<Guid> ItemIds { get; set; } = Array.Empty<Guid>();
 
     /// <summary>
     /// Gets or sets the maximum number of items, or null for the server default.

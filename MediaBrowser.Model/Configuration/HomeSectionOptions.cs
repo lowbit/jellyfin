@@ -17,9 +17,10 @@ namespace MediaBrowser.Model.Configuration
         public string Key { get; set; } = string.Empty;
 
         /// <summary>
-        /// Gets or sets the collection or genre this section is bound to.
+        /// Gets or sets the items this section is bound to: the collection, or the genres of a
+        /// genre block in display order.
         /// </summary>
-        public Guid? ItemId { get; set; }
+        public Guid[] ItemIds { get; set; } = Array.Empty<Guid>();
 
         /// <summary>
         /// Gets or sets the maximum number of items, or null for the server default.

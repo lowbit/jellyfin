@@ -66,12 +66,7 @@ public static class HomeSectionKeys
     public const string PinnedCollection = "pinnedcollection";
 
     /// <summary>
-    /// Items of one genre.
+    /// One row per genre, every genre or a chosen few.
     /// </summary>
     public const string Genre = "genre";
-
-    /// <summary>
-    /// Items similar to ones the user recently finished.
-    /// </summary>
-    public const string BecauseYouWatched = "becauseyouwatched";
 }

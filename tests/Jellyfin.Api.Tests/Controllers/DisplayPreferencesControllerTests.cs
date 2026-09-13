@@ -36,7 +36,7 @@ public class DisplayPreferencesControllerTests
         // A request that only changes an unrelated preference must not empty the home screen.
         var stored = CreatePreferences(
             new HomeSection { Order = 0, Key = HomeSectionKeys.SmallLibraryTiles },
-            new HomeSection { Order = 1, Key = HomeSectionKeys.PinnedCollection, ItemId = _collectionId });
+            new HomeSection { Order = 1, Key = HomeSectionKeys.PinnedCollection, ItemIds = [_collectionId] });
 
         Update(stored, new Dictionary<string, string?> { ["skipForwardLength"] = "30000" });
 
@@ -51,7 +51,7 @@ public class DisplayPreferencesControllerTests
     {
         var stored = CreatePreferences(
             new HomeSection { Order = 0, Key = HomeSectionKeys.SmallLibraryTiles },
-            new HomeSection { Order = 1, Key = HomeSectionKeys.PinnedCollection, ItemId = _collectionId, MaxItems = 5 },
+            new HomeSection { Order = 1, Key = HomeSectionKeys.PinnedCollection, ItemIds = [_collectionId], MaxItems = 5 },
             new HomeSection { Order = 2, Key = HomeSectionKeys.LatestMedia, Active = false },
             new HomeSection { Order = 3, Key = HomeSectionKeys.NextUp });
 
@@ -69,7 +69,7 @@ public class DisplayPreferencesControllerTests
 
         // The pinned row keeps its position, its item and its limit.
         Assert.Equal(HomeSectionKeys.PinnedCollection, sections[1].Key);
-        Assert.Equal(_collectionId, sections[1].ItemId);
+        Assert.Equal([_collectionId], sections[1].ItemIds);
         Assert.Equal(5, sections[1].MaxItems);
 
         // As does the hidden one, which the client was never shown either.
@@ -84,7 +84,7 @@ public class DisplayPreferencesControllerTests
     {
         var stored = CreatePreferences(
             new HomeSection { Order = 0, Key = HomeSectionKeys.SmallLibraryTiles },
-            new HomeSection { Order = 1, Key = HomeSectionKeys.PinnedCollection, ItemId = _collectionId },
+            new HomeSection { Order = 1, Key = HomeSectionKeys.PinnedCollection, ItemIds = [_collectionId] },
             new HomeSection { Order = 2, Key = HomeSectionKeys.LatestMedia, Active = false },
             new HomeSection { Order = 3, Key = HomeSectionKeys.NextUp });
 

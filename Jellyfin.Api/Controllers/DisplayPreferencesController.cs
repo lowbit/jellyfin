@@ -264,7 +264,7 @@ public class DisplayPreferencesController : BaseJellyfinApiController
             {
                 Order = section.Order,
                 Key = section.Key,
-                ItemId = section.ItemId,
+                ItemIds = section.ItemIds,
                 MaxItems = section.MaxItems,
                 Active = section.Active
             })

@@ -12,6 +12,7 @@ using MediaBrowser.Controller.Configuration;
 using MediaBrowser.Controller.Dto;
 using MediaBrowser.Controller.HomeSections;
 using MediaBrowser.Controller.Library;
+using MediaBrowser.Model.Configuration;
 using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.HomeSections;
 using MediaBrowser.Model.Querying;
@@ -278,7 +279,7 @@ public sealed class HomeSectionManager : IHomeSectionManager, IDisposable
                 {
                     Order = index,
                     Key = option.Key,
-                    ItemId = option.ItemId,
+                    ItemIds = option.ItemIds,
                     MaxItems = option.MaxItems,
                     Active = option.Active
                 })
@@ -298,22 +299,29 @@ public sealed class HomeSectionManager : IHomeSectionManager, IDisposable
 
         prefs.HomeSections.Clear();
 
-        for (var i = 0; i < sections.Count; i++)
+        foreach (var section in Normalize(sections))
         {
-            var section = sections[i];
-            prefs.HomeSections.Add(new HomeSection
-            {
-                // Position comes from the list order, so callers cannot store a contradictory Order.
-                Order = i,
-                Key = section.Key.ToLowerInvariant(),
-                ItemId = section.ItemId,
-                MaxItems = section.MaxItems,
-                Active = section.Active
-            });
+            prefs.HomeSections.Add(section);
         }
 
         dbContext.SaveChanges();
         OnSectionsChanged(userId);
+    }
+
+    /// <inheritdoc />
+    public void SetDefaultSections(IReadOnlyList<HomeSection> sections)
+    {
+        _configurationManager.Configuration.DefaultHomeSections = Normalize(sections)
+            .Select(section => new HomeSectionOptions
+            {
+                Key = section.Key,
+                ItemIds = section.ItemIds.ToArray(),
+                MaxItems = section.MaxItems,
+                Active = section.Active
+            })
+            .ToArray();
+
+        _configurationManager.SaveConfiguration();
     }
 
     /// <inheritdoc />
@@ -350,6 +358,25 @@ public sealed class HomeSectionManager : IHomeSectionManager, IDisposable
         _disposed = true;
     }
 
+    /// <summary>
+    /// Copies a layout for storing, with keys lower-cased and positions from the list order.
+    /// </summary>
+    /// <remarks>
+    /// Position comes from the list order so callers cannot store a layout whose positions
+    /// contradict its own ordering.
+    /// </remarks>
+    private static List<HomeSection> Normalize(IReadOnlyList<HomeSection> sections)
+        => sections
+            .Select((section, index) => new HomeSection
+            {
+                Order = index,
+                Key = section.Key.ToLowerInvariant(),
+                ItemIds = section.ItemIds,
+                MaxItems = section.MaxItems,
+                Active = section.Active
+            })
+            .ToList();
+
     private static DisplayPreferences GetOrCreatePreferences(JellyfinDbContext dbContext, Guid userId, string client)
     {
         var prefs = dbContext.DisplayPreferences
@@ -384,7 +411,7 @@ public sealed class HomeSectionManager : IHomeSectionManager, IDisposable
         var query = new HomeSectionQuery
         {
             User = user,
-            ItemId = section.ItemId,
+            ItemIds = section.ItemIds,
             Limit = section.MaxItems ?? defaultLimit,
             DtoOptions = dtoOptions
         };
@@ -421,6 +448,7 @@ public sealed class HomeSectionManager : IHomeSectionManager, IDisposable
                 DisplayText = result.DisplayText,
                 ViewType = result.ViewType,
                 ParentId = result.ParentId,
+                ParentType = result.ParentType,
                 Items = result.Items
             });
         }

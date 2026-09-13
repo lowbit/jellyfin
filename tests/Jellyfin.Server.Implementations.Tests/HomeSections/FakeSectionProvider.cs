@@ -36,6 +36,8 @@ internal sealed class FakeSectionProvider : IHomeSectionProvider
 
     public bool DependsOnUserData { get; init; }
 
+    public bool AllowsMultipleItems { get; init; }
+
     public int Calls { get; private set; }
 
     public HomeSectionQuery? LastQuery { get; private set; }
@@ -54,6 +56,7 @@ internal sealed class FakeSectionProvider : IHomeSectionProvider
             DisplayText = displayText,
             ViewType = HomeSectionViewType.Portrait,
             ParentId = parentId,
+            ParentType = BaseItemKind.BoxSet,
             Items = itemNames.Select(name => new BaseItemDto { Id = Guid.NewGuid(), Name = name }).ToList()
         };
 

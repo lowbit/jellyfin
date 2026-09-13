@@ -9,6 +9,7 @@ using MediaBrowser.Controller.Dto;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.HomeSections;
 using MediaBrowser.Controller.Library;
+using MediaBrowser.Model.Dto;
 using MediaBrowser.Model.Globalization;
 using MediaBrowser.Model.HomeSections;
 using MediaBrowser.Model.Querying;
@@ -16,8 +17,13 @@ using MediaBrowser.Model.Querying;
 namespace Jellyfin.Server.Implementations.HomeSections.Providers;
 
 /// <summary>
-/// Items of one genre.
+/// One row per chosen genre, in the order they were chosen.
 /// </summary>
+/// <remarks>
+/// One section rather than one per genre, so genre rows are turned on by adding it and off by
+/// removing it, and narrowed by unticking genres. A settings screen starts it off with every
+/// genre ticked, so adding it takes no further setup; bound to nothing it draws nothing.
+/// </remarks>
 public sealed class GenreSectionProvider : IHomeSectionProvider
 {
     /// <summary>
@@ -60,10 +66,13 @@ public sealed class GenreSectionProvider : IHomeSectionProvider
     public string Key => HomeSectionKeys.Genre;
 
     /// <inheritdoc />
-    public string Name => _localization.GetLocalizedString("HeaderGenre");
+    public string Name => _localization.GetLocalizedString("Genres");
 
     /// <inheritdoc />
     public BaseItemKind? ItemKind => BaseItemKind.Genre;
+
+    /// <inheritdoc />
+    public bool AllowsMultipleItems => true;
 
     /// <inheritdoc />
     public bool DependsOnUserData => false;
@@ -84,17 +93,42 @@ public sealed class GenreSectionProvider : IHomeSectionProvider
     {
         IReadOnlyList<HomeSectionResult> none = [];
 
-        if (!query.ItemId.HasValue)
+        if (query.ItemIds.Count == 0)
         {
             return Task.FromResult(none);
         }
 
-        var genre = _libraryManager.GetItemById<BaseItem>(query.ItemId.Value, query.User);
-        if (genre is null)
+        var genres = _libraryManager.GetGenres(new InternalItemsQuery(query.User)
         {
-            return Task.FromResult(none);
+            IncludeItemTypes = [BaseItemKind.Movie, BaseItemKind.Series],
+            Recursive = true,
+            IsVirtualItem = false,
+            DtoOptions = new DtoOptions(false),
+            EnableTotalRecordCount = false
+        }).Items.ToDictionary(genre => genre.Item.Id, genre => genre.Item);
+
+        var rows = new List<HomeSectionResult>(query.ItemIds.Count);
+
+        // In the order chosen, since that order is the one thing the binding says about how the
+        // rows should sit. A genre that no longer exists is passed over rather than drawn empty.
+        foreach (var id in query.ItemIds)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (genres.TryGetValue(id, out var genre))
+            {
+                rows.Add(BuildRow(genre, query));
+            }
         }
 
+        return Task.FromResult<IReadOnlyList<HomeSectionResult>>(rows);
+    }
+
+    /// <summary>
+    /// Builds the row for one genre: a random pick of its films and shows.
+    /// </summary>
+    private HomeSectionResult BuildRow(BaseItem genre, HomeSectionQuery query)
+    {
         var items = _libraryManager.GetItemsResult(new InternalItemsQuery(query.User)
         {
             IncludeItemTypes = [BaseItemKind.Movie, BaseItemKind.Series],
@@ -107,17 +141,13 @@ public sealed class GenreSectionProvider : IHomeSectionProvider
             EnableTotalRecordCount = false
         });
 
-        IReadOnlyList<HomeSectionResult> rows =
-        [
-            new HomeSectionResult
-            {
-                DisplayText = genre.Name,
-                ViewType = HomeSectionViewType.Portrait,
-                ParentId = genre.Id,
-                Items = _dtoService.GetBaseItemDtos(items.Items, query.DtoOptions, query.User)
-            }
-        ];
-
-        return Task.FromResult(rows);
+        return new HomeSectionResult
+        {
+            DisplayText = genre.Name,
+            ViewType = HomeSectionViewType.Portrait,
+            ParentId = genre.Id,
+            ParentType = BaseItemKind.Genre,
+            Items = _dtoService.GetBaseItemDtos(items.Items, query.DtoOptions, query.User)
+        };
     }
 }

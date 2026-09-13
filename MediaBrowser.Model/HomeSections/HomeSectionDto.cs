@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Jellyfin.Data.Enums;
 using MediaBrowser.Model.Dto;
 
 namespace MediaBrowser.Model.HomeSections;
@@ -52,6 +53,15 @@ public class HomeSectionDto
     /// A client can use it to make the heading a link.
     /// </remarks>
     public Guid? ParentId { get; set; }
+
+    /// <summary>
+    /// Gets or sets the kind of item <see cref="ParentId"/> refers to, when there is one.
+    /// </summary>
+    /// <remarks>
+    /// Lets a client open the item behind the heading without a list of what each provider is
+    /// about, so a row from a plugin links the same way a built-in one does.
+    /// </remarks>
+    public BaseItemKind? ParentType { get; set; }
 
     /// <summary>
     /// Gets or sets the items to display in the row.

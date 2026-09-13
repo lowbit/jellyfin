@@ -46,6 +46,9 @@ public sealed class LatestMediaSectionProvider : IHomeSectionProvider
     public BaseItemKind? ItemKind => null;
 
     /// <inheritdoc />
+    public bool AllowsMultipleItems => false;
+
+    /// <inheritdoc />
     public bool DependsOnUserData => false;
 
     /// <inheritdoc />

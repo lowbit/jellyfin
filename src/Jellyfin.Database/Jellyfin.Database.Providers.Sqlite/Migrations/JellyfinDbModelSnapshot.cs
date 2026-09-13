@@ -661,7 +661,8 @@ namespace Jellyfin.Server.Implementations.Migrations
                     b.Property<int>("DisplayPreferencesId")
                         .HasColumnType("INTEGER");
 
-                    b.Property<Guid?>("ItemId")
+                    b.Property<string>("ItemIds")
+                        .IsRequired()
                         .HasColumnType("TEXT");
 
                     b.Property<string>("Key")

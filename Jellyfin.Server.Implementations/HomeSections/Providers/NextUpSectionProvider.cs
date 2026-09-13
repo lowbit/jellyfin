@@ -43,6 +43,9 @@ public sealed class NextUpSectionProvider : IHomeSectionProvider
     public BaseItemKind? ItemKind => null;
 
     /// <inheritdoc />
+    public bool AllowsMultipleItems => false;
+
+    /// <inheritdoc />
     public bool DependsOnUserData => true;
 
     /// <inheritdoc />

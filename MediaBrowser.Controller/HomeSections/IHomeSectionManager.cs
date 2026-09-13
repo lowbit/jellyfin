@@ -106,6 +106,16 @@ public interface IHomeSectionManager
     void SetSections(Guid userId, string client, IReadOnlyList<HomeSection> sections);
 
     /// <summary>
+    /// Replaces the layout users without sections of their own are given.
+    /// </summary>
+    /// <remarks>
+    /// Only affects users who have not configured their own layout. An empty list restores the
+    /// built-in layout.
+    /// </remarks>
+    /// <param name="sections">The default sections. Order is taken from the list order.</param>
+    void SetDefaultSections(IReadOnlyList<HomeSection> sections);
+
+    /// <summary>
     /// Removes a user's sections so the server defaults apply again.
     /// </summary>
     /// <param name="userId">The user id.</param>

@@ -45,6 +45,9 @@ public sealed class PinnedCollectionSectionProvider : IHomeSectionProvider
     public BaseItemKind? ItemKind => BaseItemKind.BoxSet;
 
     /// <inheritdoc />
+    public bool AllowsMultipleItems => false;
+
+    /// <inheritdoc />
     public bool DependsOnUserData => false;
 
     /// <inheritdoc />
@@ -85,6 +88,7 @@ public sealed class PinnedCollectionSectionProvider : IHomeSectionProvider
                 DisplayText = boxSet.Name,
                 ViewType = HomeSectionViewType.Portrait,
                 ParentId = boxSet.Id,
+                ParentType = BaseItemKind.BoxSet,
                 Items = _dtoService.GetBaseItemDtos(children.Items, query.DtoOptions, query.User)
             }
         ];

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Jellyfin.Database.Implementations.Entities;
 using MediaBrowser.Controller.Dto;
 
@@ -15,9 +16,15 @@ public class HomeSectionQuery
     public required User User { get; init; }
 
     /// <summary>
-    /// Gets the item the section is bound to, when the provider takes one.
+    /// Gets the items the section is bound to: one for a provider that takes one, any number
+    /// for a provider that takes several, none otherwise.
     /// </summary>
-    public Guid? ItemId { get; init; }
+    public IReadOnlyList<Guid> ItemIds { get; init; } = [];
+
+    /// <summary>
+    /// Gets the item the section is bound to, for a provider that takes one.
+    /// </summary>
+    public Guid? ItemId => ItemIds.Count > 0 ? ItemIds[0] : null;
 
     /// <summary>
     /// Gets the maximum number of items per row.

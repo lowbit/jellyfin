@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 
@@ -46,13 +47,13 @@ namespace Jellyfin.Database.Implementations.Entities
         public string Key { get; set; } = string.Empty;
 
         /// <summary>
-        /// Gets or sets the item this section is bound to.
+        /// Gets or sets the items this section is bound to.
         /// </summary>
         /// <remarks>
-        /// The collection for a pinned collection or the genre for a genre row. Null for providers
-        /// that take no parameter.
+        /// The collection for a pinned collection, the genres of a genre block in display order.
+        /// Empty for providers that take no item.
         /// </remarks>
-        public Guid? ItemId { get; set; }
+        public IReadOnlyList<Guid> ItemIds { get; set; } = [];
 
         /// <summary>
         /// Gets or sets the maximum number of items to show, or null for the server default.
