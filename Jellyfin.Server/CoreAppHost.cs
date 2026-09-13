@@ -12,6 +12,7 @@ using Jellyfin.Server.Implementations.Activity;
 using Jellyfin.Server.Implementations.Devices;
 using Jellyfin.Server.Implementations.Events;
 using Jellyfin.Server.Implementations.Extensions;
+using Jellyfin.Server.Implementations.HomeSections;
 using Jellyfin.Server.Implementations.Security;
 using Jellyfin.Server.Implementations.Trickplay;
 using Jellyfin.Server.Implementations.Users;
@@ -21,6 +22,7 @@ using MediaBrowser.Controller.BaseItemManager;
 using MediaBrowser.Controller.Devices;
 using MediaBrowser.Controller.Drawing;
 using MediaBrowser.Controller.Events;
+using MediaBrowser.Controller.HomeSections;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Lyrics;
 using MediaBrowser.Controller.Net;
@@ -85,6 +87,7 @@ namespace Jellyfin.Server
             serviceCollection.AddSingleton<IAuthenticationProvider, InvalidAuthProvider>();
             serviceCollection.AddSingleton<IPasswordResetProvider, DefaultPasswordResetProvider>();
             serviceCollection.AddSingleton<IDisplayPreferencesManager, DisplayPreferencesManager>();
+            serviceCollection.AddSingleton<IHomeSectionManager, HomeSectionManager>();
             serviceCollection.AddSingleton<IDeviceManager, DeviceManager>();
             serviceCollection.AddSingleton<ITrickplayManager, TrickplayManager>();
 
@@ -93,6 +96,7 @@ namespace Jellyfin.Server
             serviceCollection.AddSingleton<IWebSocketListener, ActivityLogWebSocketListener>();
             serviceCollection.AddSingleton<IWebSocketListener, ScheduledTasksWebSocketListener>();
             serviceCollection.AddSingleton<IWebSocketListener, SessionInfoWebSocketListener>();
+            serviceCollection.AddSingleton<IWebSocketListener, HomeSectionsWebSocketListener>();
 
             serviceCollection.AddSingleton<IAuthorizationContext, AuthorizationContext>();
 

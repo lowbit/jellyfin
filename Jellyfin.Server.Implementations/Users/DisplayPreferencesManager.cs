@@ -102,7 +102,36 @@ public sealed class DisplayPreferencesManager : IDisplayPreferencesManager
     public void UpdateDisplayPreferences(DisplayPreferences displayPreferences)
     {
         using var dbContext = _dbContextFactory.CreateDbContext();
-        dbContext.DisplayPreferences.Attach(displayPreferences).State = EntityState.Modified;
+
+        var tracked = dbContext.DisplayPreferences
+            .Include(pref => pref.HomeSections)
+            .FirstOrDefault(pref => pref.Id == displayPreferences.Id);
+
+        if (tracked is null)
+        {
+            dbContext.DisplayPreferences.Attach(displayPreferences).State = EntityState.Modified;
+            dbContext.SaveChanges();
+            return;
+        }
+
+        dbContext.Entry(tracked).CurrentValues.SetValues(displayPreferences);
+
+        // The sections are replaced through the tracked parent, because attaching a detached one
+        // leaves the rows it no longer has behind as orphans instead of deleting them.
+        tracked.HomeSections.Clear();
+
+        foreach (var section in displayPreferences.HomeSections)
+        {
+            tracked.HomeSections.Add(new HomeSection
+            {
+                Order = section.Order,
+                Key = section.Key,
+                ItemId = section.ItemId,
+                MaxItems = section.MaxItems,
+                Active = section.Active
+            });
+        }
+
         dbContext.SaveChanges();
     }
 

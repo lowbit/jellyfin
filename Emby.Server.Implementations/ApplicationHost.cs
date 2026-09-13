@@ -65,6 +65,7 @@ using MediaBrowser.Controller.Drawing;
 using MediaBrowser.Controller.Dto;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.TV;
+using MediaBrowser.Controller.HomeSections;
 using MediaBrowser.Controller.IO;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.LibraryTaskScheduler;
@@ -745,6 +746,7 @@ namespace Emby.Server.Implementations
             Resolve<IMediaSourceManager>().AddParts(GetExports<IMediaSourceProvider>());
 
             Resolve<ISimilarItemsManager>().AddParts(GetExports<ISimilarItemsProvider>());
+            Resolve<IHomeSectionManager>().AddParts(GetExports<IHomeSectionProvider>());
             Resolve<ISearchManager>().AddParts(GetExports<ISearchProvider>());
         }
 

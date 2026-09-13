@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
@@ -78,9 +79,18 @@ public class DisplayPreferencesController : BaseJellyfinApiController
             ShowSidebar = displayPreferences.ShowSidebar
         };
 
-        foreach (var homeSection in displayPreferences.HomeSections)
+        // Only the section types this format has always carried are reported. It is one bare name
+        // per slot with nowhere to put a parameter, so a section bound to a collection or genre
+        // cannot be described, nor can a hidden one, nor a kind added by a plugin. Reporting them
+        // anyway would send clients a type they cannot render and have historically crashed on, so
+        // they are skipped and the remaining slots renumbered to stay contiguous.
+        var legacySlot = 0;
+        foreach (var homeSection in displayPreferences.HomeSections
+                     .Where(IsLegacyRepresentable)
+                     .OrderBy(section => section.Order))
         {
-            dto.CustomPrefs["homesection" + homeSection.Order] = homeSection.Type.ToString().ToLowerInvariant();
+            dto.CustomPrefs["homesection" + legacySlot] = homeSection.Key;
+            legacySlot++;
         }
 
         dto.CustomPrefs["chromecastVersion"] = displayPreferences.ChromecastVersion.ToString().ToLowerInvariant();
@@ -176,18 +186,32 @@ public class DisplayPreferencesController : BaseJellyfinApiController
             : string.Empty;
         displayPreferences.CustomPrefs.Remove("tvhome");
 
-        existingDisplayPreferences.HomeSections.Clear();
+        var legacyKeys = displayPreferences.CustomPrefs.Keys
+            .Where(key => key.StartsWith("homesection", StringComparison.OrdinalIgnoreCase))
+            .ToList();
 
-        foreach (var key in displayPreferences.CustomPrefs.Keys.Where(key => key.StartsWith("homesection", StringComparison.OrdinalIgnoreCase)))
+        var sentSections = new List<HomeSection>(legacyKeys.Count);
+
+        foreach (var key in legacyKeys)
         {
             var order = int.Parse(key.AsSpan().Slice("homesection".Length), CultureInfo.InvariantCulture);
             if (!Enum.TryParse<HomeSectionType>(displayPreferences.CustomPrefs[key], true, out var type))
             {
-                type = order < 8 ? defaults[order] : HomeSectionType.None;
+                type = order < defaults.Length ? defaults[order] : HomeSectionType.None;
             }
 
             displayPreferences.CustomPrefs.Remove(key);
-            existingDisplayPreferences.HomeSections.Add(new HomeSection { Order = order, Type = type });
+            sentSections.Add(new HomeSection { Order = order, Key = ToKey(type) });
+        }
+
+        // Slot ten sorts before slot two as a string, so the order comes from the number.
+        sentSections.Sort(static (x, y) => x.Order.CompareTo(y.Order));
+
+        // A request that carries no sections at all, such as one that only changes the skip
+        // length, must leave the layout alone rather than empty it.
+        if (sentSections.Count > 0)
+        {
+            MergeLegacyHomeSections(existingDisplayPreferences, sentSections);
         }
 
         foreach (var key in displayPreferences.CustomPrefs.Keys.Where(key => key.StartsWith("landing-", StringComparison.OrdinalIgnoreCase)))
@@ -220,4 +244,69 @@ public class DisplayPreferencesController : BaseJellyfinApiController
         _displayPreferencesManager.UpdateDisplayPreferences(existingDisplayPreferences);
         return NoContent();
     }
+
+    /// <summary>
+    /// Replaces the sections a legacy client can describe, leaving the rest where they are.
+    /// </summary>
+    /// <remarks>
+    /// A legacy client sends the whole layout back as one type name per slot, so taking it at face
+    /// value would delete the sections it was never shown. Those keep the position they had and
+    /// the sent sections fill the slots around them.
+    /// </remarks>
+    /// <param name="preferences">The stored preferences.</param>
+    /// <param name="sentSections">The sections the client sent, in slot order.</param>
+    private static void MergeLegacyHomeSections(DisplayPreferences preferences, IReadOnlyList<HomeSection> sentSections)
+    {
+        var keptSections = preferences.HomeSections
+            .Where(section => !IsLegacyRepresentable(section))
+            .OrderBy(section => section.Order)
+            .Select(section => new HomeSection
+            {
+                Order = section.Order,
+                Key = section.Key,
+                ItemId = section.ItemId,
+                MaxItems = section.MaxItems,
+                Active = section.Active
+            })
+            .ToList();
+
+        var merged = new List<HomeSection>(keptSections.Count + sentSections.Count);
+        var keptIndex = 0;
+        var sentIndex = 0;
+
+        while (merged.Count < keptSections.Count + sentSections.Count)
+        {
+            var keepsPosition = keptIndex < keptSections.Count
+                && (keptSections[keptIndex].Order <= merged.Count || sentIndex >= sentSections.Count);
+
+            merged.Add(keepsPosition ? keptSections[keptIndex++] : sentSections[sentIndex++]);
+        }
+
+        preferences.HomeSections.Clear();
+
+        for (var order = 0; order < merged.Count; order++)
+        {
+            var section = merged[order];
+            section.Order = order;
+            preferences.HomeSections.Add(section);
+        }
+    }
+
+    /// <summary>
+    /// Gets a value indicating whether a section is part of the layout a legacy client sees.
+    /// </summary>
+    /// <remarks>
+    /// The legacy vocabulary is exactly <see cref="HomeSectionType"/>. Anything else, whether a
+    /// section bound to an item or a kind a plugin added, is withheld, and so is a hidden section,
+    /// because the format cannot express either. Both directions use this, so what a legacy client
+    /// is not shown is exactly what is kept when it saves the layout back.
+    /// </remarks>
+    private static bool IsLegacyRepresentable(HomeSection section)
+        => section.Active && Enum.TryParse<HomeSectionType>(section.Key, true, out _);
+
+    /// <summary>
+    /// Gets the provider key a legacy section type is stored as.
+    /// </summary>
+    private static string ToKey(HomeSectionType type)
+        => type.ToString().ToLowerInvariant();
 }

@@ -288,4 +288,13 @@ public class ServerConfiguration : BaseApplicationConfiguration
     /// Gets or sets a value indicating whether old authorization methods are allowed.
     /// </summary>
     public bool EnableLegacyAuthorization { get; set; }
+
+    /// <summary>
+    /// Gets or sets the home screen layout new users start with.
+    /// </summary>
+    /// <value>
+    /// Empty means the built-in defaults apply. A user who has configured their own layout keeps
+    /// it, so changing this never overwrites an existing home screen.
+    /// </value>
+    public HomeSectionOptions[] DefaultHomeSections { get; set; } = Array.Empty<HomeSectionOptions>();
 }

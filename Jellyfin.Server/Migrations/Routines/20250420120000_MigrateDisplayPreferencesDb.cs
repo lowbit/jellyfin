@@ -166,7 +166,7 @@ namespace Jellyfin.Server.Migrations.Routines
                         displayPreferences.HomeSections.Add(new HomeSection
                         {
                             Order = i,
-                            Type = Enum.TryParse<HomeSectionType>(homeSection, true, out var type) ? type : defaults[i]
+                            Key = (Enum.TryParse<HomeSectionType>(homeSection, true, out var type) ? type : defaults[i]).ToString().ToLowerInvariant()
                         });
 
                         dto.CustomPrefs.Remove(key);

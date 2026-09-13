@@ -244,7 +244,7 @@ namespace MediaBrowser.Controller.Net
         /// Stops sending messages over a web socket.
         /// </summary>
         /// <param name="message">The message.</param>
-        private void Stop(WebSocketMessageInfo message)
+        protected virtual void Stop(WebSocketMessageInfo message)
         {
             lock (_activeConnectionsLock)
             {
