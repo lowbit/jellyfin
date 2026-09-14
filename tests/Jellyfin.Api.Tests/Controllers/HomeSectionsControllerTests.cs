@@ -14,6 +14,7 @@ using MediaBrowser.Controller.HomeSections;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Net;
 using MediaBrowser.Model.HomeSections;
+using MediaBrowser.Model.Querying;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Moq;
@@ -41,7 +42,7 @@ public sealed class HomeSectionsControllerTests
         _userManager.Setup(x => x.GetUserById(_otherUser.Id)).Returns(_otherUser);
 
         RegisterProvider(HomeSectionKeys.Resume, "Continue Watching");
-        RegisterProvider(HomeSectionKeys.PinnedCollection, "Collection", BaseItemKind.BoxSet);
+        RegisterProvider(HomeSectionKeys.PinnedCollection, "Collections", BaseItemKind.BoxSet, allowsMultipleItems: true);
         RegisterProvider(HomeSectionKeys.Genre, "Genres", BaseItemKind.Genre, allowsMultipleItems: true);
         RegisterProvider("plugin.pinned", "Pinned item", BaseItemKind.Movie);
     }
@@ -51,10 +52,10 @@ public sealed class HomeSectionsControllerTests
     {
         IReadOnlyList<HomeSectionDto> built = [new HomeSectionDto { Id = "resume", Key = "resume" }];
         _homeSectionManager
-            .Setup(x => x.GetHomeSectionsAsync(_user, Client, 16, It.IsAny<CancellationToken>()))
+            .Setup(x => x.GetHomeSectionsAsync(_user, Client, 16, It.IsAny<IReadOnlyCollection<string>?>(), It.IsAny<IReadOnlyCollection<ItemFields>?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(built);
 
-        var result = await CreateController(_user).GetHomeSections(_user.Id, Client, 16, TestContext.Current.CancellationToken);
+        var result = await CreateController(_user).GetHomeSections(_user.Id, Client, 16, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Same(built, result.Value);
     }
@@ -63,7 +64,7 @@ public sealed class HomeSectionsControllerTests
     public async Task GetHomeSections_ReturnsNotFoundForAnUnknownUser()
     {
         // Only an administrator gets this far; anyone else is refused before the lookup.
-        var result = await CreateController(_user, isAdministrator: true).GetHomeSections(Guid.NewGuid(), Client, 16, TestContext.Current.CancellationToken);
+        var result = await CreateController(_user, isAdministrator: true).GetHomeSections(Guid.NewGuid(), Client, 16, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.IsType<NotFoundResult>(result.Result);
     }
@@ -74,7 +75,7 @@ public sealed class HomeSectionsControllerTests
         // RequestHelpers refuses a non administrator asking for another user before the controller
         // gets a say. The middleware turns this into a 403.
         await Assert.ThrowsAsync<SecurityException>(
-            () => CreateController(_otherUser).GetHomeSections(_user.Id, Client, 16, TestContext.Current.CancellationToken));
+            () => CreateController(_otherUser).GetHomeSections(_user.Id, Client, 16, cancellationToken: TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -83,12 +84,32 @@ public sealed class HomeSectionsControllerTests
         // Reading is not managing. A user who may not change their layout still has a home screen.
         _user.EnableUserPreferenceAccess = false;
         _homeSectionManager
-            .Setup(x => x.GetHomeSectionsAsync(_user, Client, 16, It.IsAny<CancellationToken>()))
+            .Setup(x => x.GetHomeSectionsAsync(_user, Client, 16, It.IsAny<IReadOnlyCollection<string>?>(), It.IsAny<IReadOnlyCollection<ItemFields>?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync([]);
 
-        var result = await CreateController(_user).GetHomeSections(_user.Id, Client, 16, TestContext.Current.CancellationToken);
+        var result = await CreateController(_user).GetHomeSections(_user.Id, Client, 16, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.NotNull(result.Value);
+    }
+
+    [Fact]
+    public async Task GetHomeSections_PassesTheKeysAndFieldsToTheManager()
+    {
+        _homeSectionManager
+            .Setup(x => x.GetHomeSectionsAsync(_user, Client, 16, It.IsAny<IReadOnlyCollection<string>?>(), It.IsAny<IReadOnlyCollection<ItemFields>?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+
+        await CreateController(_user).GetHomeSections(_user.Id, Client, 16, ["resume"], [ItemFields.Overview], TestContext.Current.CancellationToken);
+
+        _homeSectionManager.Verify(
+            x => x.GetHomeSectionsAsync(
+                _user,
+                Client,
+                16,
+                It.Is<IReadOnlyCollection<string>?>(keys => keys != null && keys.SequenceEqual(new[] { "resume" })),
+                It.Is<IReadOnlyCollection<ItemFields>?>(fields => fields != null && fields.Contains(ItemFields.Overview)),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     [Fact]
@@ -97,7 +118,7 @@ public sealed class HomeSectionsControllerTests
         var providers = CreateController(_user).GetHomeSectionProviders().Value;
 
         Assert.NotNull(providers);
-        Assert.Equal(["Collection", "Continue Watching", "Genres", "Pinned item"], providers!.Select(provider => provider.Name));
+        Assert.Equal(["Collections", "Continue Watching", "Genres", "Pinned item"], providers!.Select(provider => provider.Name));
         Assert.Equal(BaseItemKind.BoxSet, providers[0].ItemKind);
         Assert.Null(providers[1].ItemKind);
     }
@@ -133,8 +154,9 @@ public sealed class HomeSectionsControllerTests
     [Fact]
     public void UpdateHomeSectionConfig_RejectsASectionWithoutItsItem()
     {
+        // A provider that takes exactly one item cannot be saved bound to nothing.
         var result = CreateController(_user).UpdateHomeSectionConfig(
-            [new HomeSectionConfigDto { Key = HomeSectionKeys.PinnedCollection }],
+            [new HomeSectionConfigDto { Key = "plugin.pinned" }],
             _user.Id,
             Client);
 
@@ -288,7 +310,8 @@ public sealed class HomeSectionsControllerTests
         Assert.NotNull(providers);
 
         Assert.True(providers.Single(provider => provider.Key == HomeSectionKeys.Genre).AllowsMultipleItems);
-        Assert.False(providers.Single(provider => provider.Key == HomeSectionKeys.PinnedCollection).AllowsMultipleItems);
+        Assert.True(providers.Single(provider => provider.Key == HomeSectionKeys.PinnedCollection).AllowsMultipleItems);
+        Assert.False(providers.Single(provider => provider.Key == "plugin.pinned").AllowsMultipleItems);
     }
 
     [Fact]
@@ -338,7 +361,7 @@ public sealed class HomeSectionsControllerTests
     public void UpdateDefaultHomeSections_RejectsASectionWithoutItsItem()
     {
         var result = CreateController(_user).UpdateDefaultHomeSections(
-            [new HomeSectionConfigDto { Key = HomeSectionKeys.PinnedCollection }]);
+            [new HomeSectionConfigDto { Key = "plugin.pinned" }]);
 
         Assert.IsType<BadRequestObjectResult>(result);
         _homeSectionManager.Verify(x => x.SetDefaultSections(It.IsAny<IReadOnlyList<HomeSection>>()), Times.Never);

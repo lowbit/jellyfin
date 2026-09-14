@@ -14,7 +14,7 @@ using MediaBrowser.Model.Querying;
 namespace Jellyfin.Server.Implementations.HomeSections.Providers;
 
 /// <summary>
-/// The contents of one collection.
+/// One row per chosen collection, holding its contents.
 /// </summary>
 public sealed class PinnedCollectionSectionProvider : IHomeSectionProvider
 {
@@ -39,13 +39,13 @@ public sealed class PinnedCollectionSectionProvider : IHomeSectionProvider
     public string Key => HomeSectionKeys.PinnedCollection;
 
     /// <inheritdoc />
-    public string Name => _localization.GetLocalizedString("HeaderCollection");
+    public string Name => _localization.GetLocalizedString("Collections");
 
     /// <inheritdoc />
     public BaseItemKind? ItemKind => BaseItemKind.BoxSet;
 
     /// <inheritdoc />
-    public bool AllowsMultipleItems => false;
+    public bool AllowsMultipleItems => true;
 
     /// <inheritdoc />
     public bool DependsOnUserData => false;
@@ -53,20 +53,26 @@ public sealed class PinnedCollectionSectionProvider : IHomeSectionProvider
     /// <inheritdoc />
     public Task<IReadOnlyList<HomeSectionResult>> GetSectionsAsync(HomeSectionQuery query, CancellationToken cancellationToken)
     {
-        IReadOnlyList<HomeSectionResult> none = [];
+        var rows = new List<HomeSectionResult>(query.ItemIds.Count);
 
-        if (!query.ItemId.HasValue)
+        // In the order chosen, like genres. A collection that was deleted is passed over rather
+        // than failing the whole request.
+        foreach (var id in query.ItemIds)
         {
-            return Task.FromResult(none);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var boxSet = _libraryManager.GetItemById<BaseItem>(id, query.User);
+            if (boxSet is not null)
+            {
+                rows.Add(BuildRow(boxSet, query));
+            }
         }
 
-        var boxSet = _libraryManager.GetItemById<BaseItem>(query.ItemId.Value, query.User);
-        if (boxSet is null)
-        {
-            // The collection was deleted. Drop the row instead of failing the whole request.
-            return Task.FromResult(none);
-        }
+        return Task.FromResult<IReadOnlyList<HomeSectionResult>>(rows);
+    }
 
+    private HomeSectionResult BuildRow(BaseItem boxSet, HomeSectionQuery query)
+    {
         // Collection children need Recursive, otherwise the query returns nothing and the
         // collection looks empty when it is not.
         var children = _libraryManager.GetItemsResult(new InternalItemsQuery(query.User)
@@ -81,18 +87,13 @@ public sealed class PinnedCollectionSectionProvider : IHomeSectionProvider
             EnableTotalRecordCount = false
         });
 
-        IReadOnlyList<HomeSectionResult> rows =
-        [
-            new HomeSectionResult
-            {
-                DisplayText = boxSet.Name,
-                ViewType = HomeSectionViewType.Portrait,
-                ParentId = boxSet.Id,
-                ParentType = BaseItemKind.BoxSet,
-                Items = _dtoService.GetBaseItemDtos(children.Items, query.DtoOptions, query.User)
-            }
-        ];
-
-        return Task.FromResult(rows);
+        return new HomeSectionResult
+        {
+            DisplayText = boxSet.Name,
+            ViewType = HomeSectionViewType.Portrait,
+            ParentId = boxSet.Id,
+            ParentType = BaseItemKind.BoxSet,
+            Items = _dtoService.GetBaseItemDtos(children.Items, query.DtoOptions, query.User)
+        };
     }
 }

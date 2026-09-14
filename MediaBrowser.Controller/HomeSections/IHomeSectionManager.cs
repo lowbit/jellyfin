@@ -4,6 +4,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Database.Implementations.Entities;
 using MediaBrowser.Model.HomeSections;
+using MediaBrowser.Model.Querying;
 
 namespace MediaBrowser.Controller.HomeSections;
 
@@ -46,14 +47,23 @@ public interface IHomeSectionManager
     IHomeSectionProvider? GetProvider(string key);
 
     /// <summary>
-    /// Gets a user's home screen with its items, building it if nothing current is cached.
+    /// Gets a user's home screen with its items. Each section is built through its provider unless
+    /// its rows are cached and current.
     /// </summary>
     /// <param name="user">The user.</param>
     /// <param name="client">The client the layout belongs to.</param>
     /// <param name="itemLimit">The number of items per row for sections that set no limit.</param>
+    /// <param name="keys">Only the sections with these provider keys, or every section when null or empty.</param>
+    /// <param name="fields">Item fields to include besides the image aspect ratio, which cards always need.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>The rows to draw, in display order. Empty rows are left out.</returns>
-    Task<IReadOnlyList<HomeSectionDto>> GetHomeSectionsAsync(User user, string client, int itemLimit, CancellationToken cancellationToken);
+    Task<IReadOnlyList<HomeSectionDto>> GetHomeSectionsAsync(
+        User user,
+        string client,
+        int itemLimit,
+        IReadOnlyCollection<string>? keys,
+        IReadOnlyCollection<ItemFields>? fields,
+        CancellationToken cancellationToken);
 
     /// <summary>
     /// Marks a provider's rows stale.

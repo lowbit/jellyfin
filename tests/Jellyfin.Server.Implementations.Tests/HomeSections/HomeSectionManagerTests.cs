@@ -12,6 +12,7 @@ using MediaBrowser.Controller.HomeSections;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Model.Configuration;
 using MediaBrowser.Model.HomeSections;
+using MediaBrowser.Model.Querying;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
@@ -145,6 +146,31 @@ public sealed class HomeSectionManagerTests : SqliteDbTestFixture
 
         var section = Assert.Single(_manager.GetSections(_user.Id, Client));
         Assert.Equal([first, second], section.ItemIds);
+    }
+
+    [Fact]
+    public void GetSections_FoldsAListSectionStoredOnePerItem()
+    {
+        // Layouts written when each collection was its own section come back as one section
+        // where the first sat, items in the order they had.
+        _manager.AddParts([new FakeSectionProvider(HomeSectionKeys.PinnedCollection, "x") { ItemKind = BaseItemKind.BoxSet, AllowsMultipleItems = true }]);
+        var marvel = Guid.NewGuid();
+        var potter = Guid.NewGuid();
+
+        _manager.SetSections(
+            _user.Id,
+            Client,
+            [
+                new HomeSection { Key = HomeSectionKeys.Resume },
+                new HomeSection { Key = HomeSectionKeys.PinnedCollection, ItemIds = [marvel] },
+                new HomeSection { Key = HomeSectionKeys.NextUp },
+                new HomeSection { Key = HomeSectionKeys.PinnedCollection, ItemIds = [potter] }
+            ]);
+
+        var sections = _manager.GetSections(_user.Id, Client);
+
+        Assert.Equal([HomeSectionKeys.Resume, HomeSectionKeys.PinnedCollection, HomeSectionKeys.NextUp], sections.Select(section => section.Key));
+        Assert.Equal([marvel, potter], sections[1].ItemIds);
     }
 
     [Fact]
@@ -424,29 +450,87 @@ public sealed class HomeSectionManagerTests : SqliteDbTestFixture
         var first = await GetSectionsAsync();
         var second = await GetSectionsAsync();
 
-        Assert.Same(first, second);
+        Assert.Same(first[0], second[0]);
         Assert.Equal(1, provider.Calls);
 
         _manager.Invalidate(HomeSectionKeys.Resume, _user.Id);
 
-        Assert.NotSame(first, await GetSectionsAsync());
+        Assert.NotSame(first[0], (await GetSectionsAsync())[0]);
         Assert.Equal(2, provider.Calls);
     }
 
     [Fact]
-    public async Task GetHomeSectionsAsync_KeepsUsersClientsAndLimitsApart()
+    public async Task GetHomeSectionsAsync_KeepsUsersLimitsAndFieldsApartButSharesRowsAcrossClients()
     {
         var provider = new FakeSectionProvider(HomeSectionKeys.Resume, "Halfway");
         _manager.AddParts([provider]);
         SetLayout(new HomeSection { Key = HomeSectionKeys.Resume });
 
         await GetSectionsAsync();
-        await _manager.GetHomeSectionsAsync(_otherUser, Client, ItemLimit, CancellationToken.None);
-        await _manager.GetHomeSectionsAsync(_user, "jellyfin-androidtv", ItemLimit, CancellationToken.None);
-        // A smaller limit is a different result set, so it must not be served the larger one.
-        await _manager.GetHomeSectionsAsync(_user, Client, 4, CancellationToken.None);
+        await _manager.GetHomeSectionsAsync(_otherUser, Client, ItemLimit, null, null, CancellationToken.None);
+        // A smaller limit or more fields is a different result, so it must not be served the other.
+        await _manager.GetHomeSectionsAsync(_user, Client, 4, null, null, CancellationToken.None);
+        await _manager.GetHomeSectionsAsync(_user, Client, ItemLimit, null, [ItemFields.Overview], CancellationToken.None);
 
         Assert.Equal(4, provider.Calls);
+
+        // Layouts are per client, but the same row is the same row.
+        await _manager.GetHomeSectionsAsync(_user, "jellyfin-androidtv", ItemLimit, null, null, CancellationToken.None);
+
+        Assert.Equal(4, provider.Calls);
+    }
+
+    [Fact]
+    public async Task GetHomeSectionsAsync_BuildsOnlyTheRequestedKeys()
+    {
+        // A client told that Continue Watching went stale fetches that row and nothing else.
+        var resume = new FakeSectionProvider(HomeSectionKeys.Resume, "Halfway");
+        var genre = new FakeSectionProvider(HomeSectionKeys.Genre, "Action");
+        _manager.AddParts([resume, genre]);
+        SetLayout(
+            new HomeSection { Key = HomeSectionKeys.Genre },
+            new HomeSection { Key = HomeSectionKeys.Resume });
+
+        var sections = await _manager.GetHomeSectionsAsync(_user, Client, ItemLimit, ["Resume"], null, CancellationToken.None);
+
+        Assert.Equal(HomeSectionKeys.Resume, Assert.Single(sections).Key);
+        Assert.Equal(0, genre.Calls);
+    }
+
+    [Fact]
+    public async Task GetHomeSectionsAsync_SendsOtherFieldsOnlyWhenAsked()
+    {
+        var provider = new FakeSectionProvider(HomeSectionKeys.Resume, "Halfway");
+        _manager.AddParts([provider]);
+        SetLayout(new HomeSection { Key = HomeSectionKeys.Resume });
+
+        await GetSectionsAsync();
+
+        Assert.Equal([ItemFields.PrimaryImageAspectRatio], provider.LastQuery!.DtoOptions.Fields);
+
+        await _manager.GetHomeSectionsAsync(_user, Client, ItemLimit, null, [ItemFields.Overview], CancellationToken.None);
+
+        Assert.Contains(ItemFields.Overview, provider.LastQuery!.DtoOptions.Fields);
+        Assert.Contains(ItemFields.PrimaryImageAspectRatio, provider.LastQuery.DtoOptions.Fields);
+    }
+
+    [Fact]
+    public async Task GetHomeSectionsAsync_AsksAFailedProviderAgain()
+    {
+        // A timeout in a plugin must not blank its row until the cache expires.
+        var fail = true;
+        var provider = new FakeSectionProvider(
+            "acme.flaky",
+            _ => fail ? throw new InvalidOperationException("boom") : [FakeSectionProvider.Row("Flaky", "Back")]);
+        _manager.AddParts([provider]);
+        SetLayout(new HomeSection { Key = "acme.flaky" });
+
+        Assert.Empty(await GetSectionsAsync());
+
+        fail = false;
+
+        Assert.Single(await GetSectionsAsync());
+        Assert.Equal(2, provider.Calls);
     }
 
     [Fact]
@@ -478,14 +562,69 @@ public sealed class HomeSectionManagerTests : SqliteDbTestFixture
         SetLayout(new HomeSection { Key = HomeSectionKeys.Resume });
 
         await GetSectionsAsync();
-        await _manager.GetHomeSectionsAsync(_otherUser, Client, ItemLimit, CancellationToken.None);
+        await _manager.GetHomeSectionsAsync(_otherUser, Client, ItemLimit, null, null, CancellationToken.None);
 
         _userDataManager.Raise(x => x.UserDataSaved += null, this, new UserDataSaveEventArgs { UserId = _user.Id });
 
         await GetSectionsAsync();
-        await _manager.GetHomeSectionsAsync(_otherUser, Client, ItemLimit, CancellationToken.None);
+        await _manager.GetHomeSectionsAsync(_otherUser, Client, ItemLimit, null, null, CancellationToken.None);
 
         Assert.Equal(3, provider.Calls);
+    }
+
+    [Fact]
+    public async Task UserDataSaved_RebuildsOnlyTheRowsThatDependOnIt()
+    {
+        // Playback reports progress every few seconds; a genre row must not be rebuilt for that.
+        var resume = new FakeSectionProvider(HomeSectionKeys.Resume, "Halfway") { DependsOnUserData = true };
+        var genre = new FakeSectionProvider(HomeSectionKeys.Genre, "Action");
+        _manager.AddParts([resume, genre]);
+        SetLayout(
+            new HomeSection { Key = HomeSectionKeys.Resume },
+            new HomeSection { Key = HomeSectionKeys.Genre });
+
+        await GetSectionsAsync();
+        _userDataManager.Raise(x => x.UserDataSaved += null, this, new UserDataSaveEventArgs { UserId = _user.Id });
+        await GetSectionsAsync();
+
+        Assert.Equal(2, resume.Calls);
+        Assert.Equal(1, genre.Calls);
+    }
+
+    [Fact]
+    public async Task ItemAdded_RebuildsEveryRow()
+    {
+        var resume = new FakeSectionProvider(HomeSectionKeys.Resume, "Halfway") { DependsOnUserData = true };
+        var genre = new FakeSectionProvider(HomeSectionKeys.Genre, "Action");
+        _manager.AddParts([resume, genre]);
+        SetLayout(
+            new HomeSection { Key = HomeSectionKeys.Resume },
+            new HomeSection { Key = HomeSectionKeys.Genre });
+
+        await GetSectionsAsync();
+        _libraryManager.Raise(x => x.ItemAdded += null, this, new ItemChangeEventArgs());
+        await GetSectionsAsync();
+
+        Assert.Equal(2, resume.Calls);
+        Assert.Equal(2, genre.Calls);
+    }
+
+    [Fact]
+    public async Task Invalidate_RebuildsOnlyThatProvidersRows()
+    {
+        var trending = new FakeSectionProvider("acme.trending", "Hot");
+        var genre = new FakeSectionProvider(HomeSectionKeys.Genre, "Action");
+        _manager.AddParts([trending, genre]);
+        SetLayout(
+            new HomeSection { Key = "acme.trending" },
+            new HomeSection { Key = HomeSectionKeys.Genre });
+
+        await GetSectionsAsync();
+        _manager.Invalidate("Acme.Trending");
+        await GetSectionsAsync();
+
+        Assert.Equal(2, trending.Calls);
+        Assert.Equal(1, genre.Calls);
     }
 
     [Fact]
@@ -557,5 +696,5 @@ public sealed class HomeSectionManagerTests : SqliteDbTestFixture
         => _manager.SetSections(_user.Id, Client, sections);
 
     private Task<IReadOnlyList<HomeSectionDto>> GetSectionsAsync()
-        => _manager.GetHomeSectionsAsync(_user, Client, ItemLimit, CancellationToken.None);
+        => _manager.GetHomeSectionsAsync(_user, Client, ItemLimit, null, null, CancellationToken.None);
 }

@@ -4,12 +4,14 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Api.Helpers;
+using Jellyfin.Api.ModelBinders;
 using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Extensions;
 using MediaBrowser.Common.Api;
 using MediaBrowser.Controller.HomeSections;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Model.HomeSections;
+using MediaBrowser.Model.Querying;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -50,6 +52,8 @@ public class HomeSectionsController : BaseJellyfinApiController
     /// <param name="userId">The user id.</param>
     /// <param name="client">The client the layout belongs to.</param>
     /// <param name="itemLimit">Default number of items per section, when a section sets no limit.</param>
+    /// <param name="keys">Optional. Only the sections with these provider keys, such as the ones a HomeSectionsChanged message named. Every section when empty.</param>
+    /// <param name="fields">Optional. Item fields to include besides PrimaryImageAspectRatio, which is always sent.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <response code="200">Home sections returned.</response>
     /// <response code="404">User not found.</response>
@@ -61,6 +65,8 @@ public class HomeSectionsController : BaseJellyfinApiController
         [FromQuery] Guid? userId,
         [FromQuery] string client = "emby",
         [FromQuery] int itemLimit = DefaultItemLimit,
+        [FromQuery, ModelBinder(typeof(CommaDelimitedCollectionModelBinder))] string[]? keys = null,
+        [FromQuery, ModelBinder(typeof(CommaDelimitedCollectionModelBinder))] ItemFields[]? fields = null,
         CancellationToken cancellationToken = default)
     {
         var requestUserId = RequestHelpers.GetUserId(User, userId);
@@ -77,7 +83,7 @@ public class HomeSectionsController : BaseJellyfinApiController
             return StatusCode(StatusCodes.Status403Forbidden, "User is not allowed to view this user's home sections.");
         }
 
-        var sections = await _homeSectionManager.GetHomeSectionsAsync(user, client, itemLimit, cancellationToken).ConfigureAwait(false);
+        var sections = await _homeSectionManager.GetHomeSectionsAsync(user, client, itemLimit, keys, fields, cancellationToken).ConfigureAwait(false);
 
         return new ActionResult<IReadOnlyList<HomeSectionDto>>(sections);
     }

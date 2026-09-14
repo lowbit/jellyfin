@@ -28,10 +28,11 @@ namespace Jellyfin.Server.Implementations.HomeSections;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Built sections are cached per user for a few minutes. Entries are keyed by a per user
-/// generation number rather than evicted directly, because <see cref="IMemoryCache"/> cannot
-/// enumerate its keys: bumping the generation orphans a user's entries at once and the old ones
-/// fall out on their own expiry.
+/// Built rows are cached per section for a few minutes, so a change to one row does not rebuild
+/// the others. Entries are keyed by generation numbers rather than evicted directly, because
+/// <see cref="IMemoryCache"/> cannot enumerate its keys: one per user, bumped when everything went
+/// stale, and one per user and provider key, bumped when only that provider's rows did. The
+/// orphaned entries fall out on their own expiry.
 /// </para>
 /// <para>
 /// Everything that reacts to stale sections listens to <see cref="Invalidated"/> rather than
@@ -76,6 +77,7 @@ public sealed class HomeSectionManager : IHomeSectionManager, IDisposable
     private readonly ILogger<HomeSectionManager> _logger;
 
     private readonly ConcurrentDictionary<Guid, long> _generations = new();
+    private readonly ConcurrentDictionary<(Guid UserId, string Key), long> _keyGenerations = new();
 
     private Dictionary<string, IHomeSectionProvider> _providers = new(StringComparer.OrdinalIgnoreCase);
     private IReadOnlyList<IHomeSectionProvider> _orderedProviders = [];
@@ -182,19 +184,19 @@ public sealed class HomeSectionManager : IHomeSectionManager, IDisposable
         => _providers.TryGetValue(key, out var provider) ? provider : null;
 
     /// <inheritdoc />
-    public async Task<IReadOnlyList<HomeSectionDto>> GetHomeSectionsAsync(User user, string client, int itemLimit, CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<HomeSectionDto>> GetHomeSectionsAsync(
+        User user,
+        string client,
+        int itemLimit,
+        IReadOnlyCollection<string>? keys,
+        IReadOnlyCollection<ItemFields>? fields,
+        CancellationToken cancellationToken)
     {
-        var cacheKey = GetCacheKey(user.Id, client, itemLimit);
-        if (_memoryCache.TryGetValue(cacheKey, out IReadOnlyList<HomeSectionDto>? cached) && cached is not null)
-        {
-            return cached;
-        }
-
-        // What a card needs and nothing more. The same options go to every provider so rows render
-        // alike, and so the cache holds one shape.
+        // Cards need the aspect ratio to lay out; anything else is sent only when asked for, as on
+        // the other item endpoints. The same options go to every provider so rows render alike.
         var dtoOptions = new DtoOptions
         {
-            Fields = [ItemFields.PrimaryImageAspectRatio, ItemFields.Overview],
+            Fields = (fields ?? []).Append(ItemFields.PrimaryImageAspectRatio).Distinct().Order().ToArray(),
             EnableImages = true,
             EnableUserData = true,
             ImageTypes = [ImageType.Primary, ImageType.Backdrop, ImageType.Thumb]
@@ -202,12 +204,13 @@ public sealed class HomeSectionManager : IHomeSectionManager, IDisposable
 
         var configured = GetEffectiveSections(user.Id, client)
             .Where(section => section.Active)
+            .Where(section => keys is null || keys.Count == 0 || keys.Contains(section.Key, StringComparer.OrdinalIgnoreCase))
             .ToList();
 
         // Sections are independent queries, so run them together rather than serially. The
         // configured order is restored afterwards because it is what the user sees.
         var built = await Task.WhenAll(
-            configured.Select(section => BuildSectionAsync(section, user, dtoOptions, itemLimit, cancellationToken)))
+            configured.Select(section => GetSectionAsync(section, user, dtoOptions, section.MaxItems ?? itemLimit, cancellationToken)))
             .ConfigureAwait(false);
 
         var sections = new List<HomeSectionDto>();
@@ -225,8 +228,6 @@ public sealed class HomeSectionManager : IHomeSectionManager, IDisposable
                 }
             }
         }
-
-        _memoryCache.Set(cacheKey, (IReadOnlyList<HomeSectionDto>)sections, DateTimeOffset.UtcNow.Add(CacheLength));
 
         return sections;
     }
@@ -253,11 +254,42 @@ public sealed class HomeSectionManager : IHomeSectionManager, IDisposable
     {
         using var dbContext = _dbContextFactory.CreateDbContext();
 
-        return dbContext.DisplayPreferences
+        return FoldListSections(dbContext.DisplayPreferences
             .Where(pref => pref.UserId.Equals(userId) && pref.Client == client && pref.ItemId.Equals(SettingsItemId))
             .SelectMany(pref => pref.HomeSections)
             .OrderBy(section => section.Order)
-            .ToList();
+            .ToList());
+    }
+
+    /// <summary>
+    /// Folds a layout written when a list section was one section per item, so genre or
+    /// collection sections that sit apart become one section where the first was, with the
+    /// items in the order they had.
+    /// </summary>
+    private List<HomeSection> FoldListSections(List<HomeSection> sections)
+    {
+        var folded = new List<HomeSection>(sections.Count);
+        var first = new Dictionary<string, HomeSection>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var section in sections)
+        {
+            if (GetProvider(section.Key)?.AllowsMultipleItems != true)
+            {
+                folded.Add(section);
+                continue;
+            }
+
+            if (first.TryGetValue(section.Key, out var head))
+            {
+                head.ItemIds = head.ItemIds.Concat(section.ItemIds).Distinct().ToArray();
+                continue;
+            }
+
+            first[section.Key] = section;
+            folded.Add(section);
+        }
+
+        return folded;
     }
 
     /// <inheritdoc />
@@ -274,7 +306,7 @@ public sealed class HomeSectionManager : IHomeSectionManager, IDisposable
         var adminDefaults = _configurationManager.Configuration.DefaultHomeSections;
         if (adminDefaults.Length > 0)
         {
-            return adminDefaults
+            return FoldListSections(adminDefaults
                 .Select((option, index) => new HomeSection
                 {
                     Order = index,
@@ -283,7 +315,7 @@ public sealed class HomeSectionManager : IHomeSectionManager, IDisposable
                     MaxItems = option.MaxItems,
                     Active = option.Active
                 })
-                .ToList();
+                .ToList());
         }
 
         return BuiltInDefaults
@@ -393,11 +425,38 @@ public sealed class HomeSectionManager : IHomeSectionManager, IDisposable
         return prefs;
     }
 
-    private async Task<IReadOnlyList<HomeSectionDto>> BuildSectionAsync(
+    private async Task<IReadOnlyList<HomeSectionDto>> GetSectionAsync(
         HomeSection section,
         User user,
         DtoOptions dtoOptions,
-        int defaultLimit,
+        int limit,
+        CancellationToken cancellationToken)
+    {
+        // The key is taken before building, so rows built across an invalidation are stored under
+        // the generation they belong to and are never served afterwards.
+        var cacheKey = GetCacheKey(user.Id, section, limit, dtoOptions.Fields);
+        if (_memoryCache.TryGetValue(cacheKey, out IReadOnlyList<HomeSectionDto>? cached) && cached is not null)
+        {
+            return cached;
+        }
+
+        var rows = await BuildSectionAsync(section, user, dtoOptions, limit, cancellationToken).ConfigureAwait(false);
+        if (rows is null)
+        {
+            // A provider that failed is asked again next time instead of being remembered as empty.
+            return [];
+        }
+
+        _memoryCache.Set(cacheKey, rows, DateTimeOffset.UtcNow.Add(CacheLength));
+
+        return rows;
+    }
+
+    private async Task<IReadOnlyList<HomeSectionDto>?> BuildSectionAsync(
+        HomeSection section,
+        User user,
+        DtoOptions dtoOptions,
+        int limit,
         CancellationToken cancellationToken)
     {
         var provider = GetProvider(section.Key);
@@ -412,7 +471,7 @@ public sealed class HomeSectionManager : IHomeSectionManager, IDisposable
         {
             User = user,
             ItemIds = section.ItemIds,
-            Limit = section.MaxItems ?? defaultLimit,
+            Limit = limit,
             DtoOptions = dtoOptions
         };
 
@@ -429,7 +488,7 @@ public sealed class HomeSectionManager : IHomeSectionManager, IDisposable
         {
             // One broken provider, most likely from a plugin, must not take the home screen down.
             _logger.LogWarning(ex, "Home section provider {Key} failed for user {UserId}", provider.Key, user.Id);
-            return [];
+            return null;
         }
 
         var rows = new List<HomeSectionDto>(results.Count);
@@ -456,18 +515,33 @@ public sealed class HomeSectionManager : IHomeSectionManager, IDisposable
         return rows;
     }
 
-    private string GetCacheKey(Guid userId, string client, int itemLimit)
+    private string GetCacheKey(Guid userId, HomeSection section, int limit, IEnumerable<ItemFields> fields)
     {
-        var generation = _generations.GetOrAdd(userId, 0);
+        var key = section.Key.ToLowerInvariant();
+        var userGeneration = _generations.GetOrAdd(userId, 0);
+        var keyGeneration = _keyGenerations.GetOrAdd((userId, key), 0);
+        var itemIds = string.Join(',', section.ItemIds.Select(id => id.ToString("N", CultureInfo.InvariantCulture)));
 
+        // Everything that changes what the provider is asked for is part of the key. The client is
+        // not: two clients showing the same row share it.
         return string.Create(
             CultureInfo.InvariantCulture,
-            $"homesections-{userId:N}-{client}-{itemLimit}-{generation}");
+            $"homesection-{userId:N}-{key}-{itemIds}-{limit}-{string.Join(',', fields)}-{userGeneration}-{keyGeneration}");
     }
 
     private void Invalidate(Guid userId, bool allStale, IReadOnlyList<string> staleKeys)
     {
-        _generations.AddOrUpdate(userId, 1, (_, generation) => generation + 1);
+        if (allStale)
+        {
+            _generations.AddOrUpdate(userId, 1, (_, generation) => generation + 1);
+        }
+        else
+        {
+            foreach (var key in staleKeys)
+            {
+                _keyGenerations.AddOrUpdate((userId, key), 1, (_, generation) => generation + 1);
+            }
+        }
 
         Invalidated?.Invoke(this, new HomeSectionInvalidatedEventArgs
         {
